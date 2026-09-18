@@ -25,6 +25,15 @@ async def main() -> int:
     ap.add_argument("--video", metavar="DIR", help="record video to DIR")
     ap.add_argument("--steps", type=int, default=12)
     ap.add_argument("--trace", default="traces/last.jsonl")
+    ap.add_argument("--min-conf", type=float, default=0.25,
+                    help="below this, fall back to a heuristic instead of "
+                         "acting. Lower it for exploration tasks, where the "
+                         "best available option is legitimately a weak one")
+    ap.add_argument("--no-search", action="store_true",
+                    help="remove search boxes from the action space, so a "
+                         "'links only' rule is enforced rather than requested")
+    ap.add_argument("--scrolls", type=int, default=3,
+                    help="consecutive scrolls tolerated before giving up")
     a = ap.parse_args()
 
     print(f"\n  task: {a.task}\n  from: {a.url}\n")
@@ -50,7 +59,9 @@ async def main() -> int:
         try:
             brain.warm()                     # pay TLS before the clock starts
             agent = Agent(page, brain, a.task, max_steps=a.steps,
-                          overlay=a.overlay or bool(a.video), dwell_ms=a.dwell)
+                          overlay=a.overlay or bool(a.video), dwell_ms=a.dwell,
+                          min_confidence=a.min_conf, scroll_budget=a.scrolls,
+                          allow_search=not a.no_search)
             res = await agent.run()
         finally:
             brain.close()

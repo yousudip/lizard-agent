@@ -156,13 +156,23 @@ class Agent:
     def __init__(self, page, brain, task: str, max_steps: int = 20,
                  min_confidence: float = 0.25, verbose: bool = True,
                  overlay: bool = False, dwell_ms: int = 0,
-                 done_confidence: float = 0.6):
+                 done_confidence: float = 0.6, scroll_budget: int = 3,
+                 allow_search: bool = True):
         self.page, self.brain, self.task = page, brain, task
         self.max_steps, self.min_confidence = max_steps, min_confidence
         self.verbose = verbose
         self.overlay = overlay
         self.dwell_ms = dwell_ms      # pause after painting, for recording
         self.done_confidence = done_confidence
+        # How long to tolerate scrolling before calling a run stuck.
+        # Exploration tasks legitimately wander; lookups should not.
+        self.scroll_budget = scroll_budget
+        # A rule you can enforce should not be left to the model. Told in
+        # prose to reach a page "by clicking links only", the agent typed
+        # the destination into the search box on step 2 - which is a
+        # perfectly sensible way to reach a page and exactly what it was
+        # asked not to do. Removing the box removes the question.
+        self.allow_search = allow_search
         self._done_rejected = 0
         self.constraints: Constraints = parse(task)
         self._terms: str | None = None      # resolved lazily, once
@@ -204,6 +214,13 @@ class Agent:
                           if e.render() not in self._dead
                           and e.render() not in self._clicked
                           and not AVOID.search(e.name)] or p.elements
+
+            if not self.allow_search:
+                p.elements = [e for e in p.elements
+                              if not (e.typable
+                                      or "search" in e.role.lower()
+                                      or "search" in e.name.lower())
+                              ] or p.elements
             # A bot challenge ends the run. We do not attempt to solve it.
             if CAPTCHA.search(p.text[:1500]) or any(
                     CAPTCHA.search(e.name) for e in p.elements[:60]):
@@ -290,10 +307,11 @@ class Agent:
 
             if action == "scroll":
                 self._scrolls += 1
-                if self._scrolls > 2 and p.scroll_y >= p.scroll_max - 50:
+                if (self._scrolls > self.scroll_budget - 1
+                        and p.scroll_y >= p.scroll_max - 50):
                     step.action, step.note = "stuck", "bottom of page, no progress"
                     self._record(step); reason = step.note; break
-                if self._scrolls > 3:
+                if self._scrolls > self.scroll_budget:
                     step.action, step.note = "stuck", "scrolled repeatedly without progress"
                     self._record(step); reason = step.note; break
             else:

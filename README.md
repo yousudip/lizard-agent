@@ -187,7 +187,16 @@ Two consequences worth knowing:
   field to type into and not a link to follow; GitHub's "Sort by" defeats it.
 - **No vision.** Accessibility-tree only. Canvas-heavy or unlabelled sites defeat it.
 - **No synthesis.** Answers are extracted spans, never composed prose.
-- **Weak multi-hop reasoning.** There is no reasoner in the loop.
+- **Weak multi-hop reasoning.** There is no reasoner in the loop. The
+  Wikipedia game - reach article B from article A using only links - looks
+  like an ideal long-running demo and is not: it needs a *plan* ("head
+  toward Biology to reach Photosynthesis"), and without one the agent
+  wanders into Wikipedia's own meta-pages. Hierarchical drill-down, where
+  each step is locally obvious, is the shape that suits a System One model.
+- **Long filter-heavy runs tend to end `stuck`.** Stacking five constraints
+  on a results page reaches 11-12 steps and applies most of the filters,
+  then the agent starts preferring `scroll` over clicking and runs out the
+  budget near the bottom of the page.
 - **Query wording is the soft spot.** Search terms are *selected* from the
   user's own words by a fanned-out yes/no per word — never generated. It
   handles "which words name the thing" well; it is not a query writer.
