@@ -25,6 +25,11 @@ DEMOS = [
      "find a wireless headphone under Rs 2000 delivered within 2 days", 10,
      "Constraint satisfaction. Nobody told it Amazon has a delivery filter."),
 
+    ("amazon-pin", "https://www.amazon.in",
+     "wireless headphones under Rs 2000 which can get delivered to "
+     "562125 under 2 days", 12,
+     "Four constraints and two fields: price, PIN, delivery window, query."),
+
     ("pydocs", "https://docs.python.org/3/",
      "find the documentation page for the asyncio gather function", 8,
      "Precision: lands on the exact anchor and quotes the signature."),

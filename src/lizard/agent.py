@@ -171,6 +171,7 @@ class Agent:
         self._seen: set[tuple] = set()
         self._scrolls = 0          # consecutive; scrolling is the fallback,
                                    # so it needs its own escape hatch
+        self._clicked: set[str] = set()      # controls already actioned
         self._blocked: dict[str, int] = {}   # times an action was suppressed
         self._dead: set[str] = set()   # elements that failed to act; a click
                                        # that times out must not be offered
@@ -194,8 +195,14 @@ class Agent:
             p = await self._perceive()
             # Drop elements that have already failed, and controls that
             # would undo work. Both arms see the same filtered list.
+            # A control that has already been clicked does not get offered
+            # again. Applying a filter does not remove its link from the
+            # sidebar, so without this the agent re-clicks "Get It in 2
+            # Days" it has already applied, twice, and spends the rest of
+            # the run oscillating between two delivery filters.
             p.elements = [e for e in p.elements
                           if e.render() not in self._dead
+                          and e.render() not in self._clicked
                           and not AVOID.search(e.name)] or p.elements
             # A bot challenge ends the run. We do not attempt to solve it.
             if CAPTCHA.search(p.text[:1500]) or any(
@@ -501,6 +508,7 @@ class Agent:
                 await self.page.dispatch_event(tgt.selector, "click",
                                                timeout=3000)
             self.history.append(f'clicked [{tgt.id}] {tgt.render()}')
+            self._clicked.add(tgt.render())
             await self.page.wait_for_timeout(900)
             if self.page.url == before:
                 await self._follow_new_tab()

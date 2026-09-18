@@ -119,6 +119,8 @@ _MONTHS = {m: i for i, m in enumerate(
     ["jan", "feb", "mar", "apr", "may", "jun",
      "jul", "aug", "sep", "oct", "nov", "dec"], start=1)}
 _DAYNUM = re.compile(r"(\d{1,2})\s*([A-Za-z]{3,})")
+_WEEKDAYS = ["monday", "tuesday", "wednesday", "thursday",
+             "friday", "saturday", "sunday"]
 
 
 def days_until(when: str, today: date | None = None) -> int | None:
@@ -152,6 +154,13 @@ def days_until(when: str, today: date | None = None) -> int | None:
             except ValueError:
                 return None
         return (target - today).days
+
+    # A bare weekday ("delivery Sunday") means the next one, and today
+    # itself would have been written as "today".
+    for i, name in enumerate(_WEEKDAYS):
+        if re.fullmatch(rf"{name}|{name[:3]}\.?", w):
+            ahead = (i - today.weekday()) % 7
+            return ahead or 7
 
     return None
 
