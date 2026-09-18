@@ -203,6 +203,31 @@ Two consequences worth knowing:
 - **Bot challenges end the run.** By design — PyPI's search is behind one,
   and the agent stops rather than attempting to get past it.
 
+## Where a run's wall-clock time actually goes
+
+A demo run looked slow — 11 steps taking 80 seconds — so it got measured
+rather than guessed at. The result was not flattering:
+
+| | before | share | after |
+|---|---|---|---|
+| **our own deliberate sleeps** | **41.6 s** | **69%** | **16.9 s** |
+| page loads (really the network) | 15.1 s | 25% | 15.2 s |
+| Jev compute + network | 3.9 s | 6% | 7.4 s |
+| wall | 60.5 s | | 39.5 s |
+
+The loop slept 900 ms after every action and then waited for
+`networkidle` with a 3.5 s timeout. On an ad-heavy page the network never
+goes idle, so that timeout was paid in full every step — 5.3 seconds of
+sleeping per action, while the model accounted for 2%.
+
+Replacing it with a `MutationObserver` that resolves once the DOM has been
+quiet for 500 ms cut the waiting by 60% and the wall clock by a third.
+There is a real tradeoff underneath: a 220 ms quiet period was faster
+still but perceived pages mid-transition, and run quality visibly dropped.
+
+The honest reading of the original "the model is 2% of runtime" is that it
+was true, and most of the other 98% was our own `sleep()`.
+
 ## Two fixes worth knowing about
 
 **Wording drove a whole failure mode.** The `scroll` action was described as

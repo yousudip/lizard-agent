@@ -93,7 +93,8 @@ async def run_one(pw, name, url, task, steps, note, a):
             print(f"  check  : {mark} — {res.verdict}")
         print(f"  {len(res.steps)} steps · {res.compute_ms:.0f} ms thinking · "
               f"{res.network_ms:.0f} ms network · "
-              f"{res.wall_ms - res.jev_ms:.0f} ms page loads · "
+              f"{res.wait_ms:.0f} ms our waits · "
+              f"{res.wall_ms - res.jev_ms - res.wait_ms:.0f} ms page loads · "
               f"${res.cost_usd:.5f}")
         if res.wall_ms:
             print(f"  the model was {100 * res.compute_ms / res.wall_ms:.0f}% "

@@ -78,7 +78,9 @@ async def main() -> int:
               f"({100*res.jev_ms/max(res.wall_ms,1):.0f}% of wall)")
         print(f"    compute  : {res.compute_ms:.0f} ms  <- the model")
         print(f"    network  : {res.network_ms:.0f} ms  <- the Indian Ocean")
-        print(f"  page loads : {res.wall_ms - res.jev_ms:.0f} ms")
+        print(f"  our waits  : {res.wait_ms:.0f} ms  <- deliberate sleeps")
+        print(f"  page loads : {res.wall_ms - res.jev_ms - res.wait_ms:.0f} ms"
+              f"  <- actually the network")
         print(f"  wall       : {res.wall_ms:.0f} ms")
         print(f"  cost       : ${res.cost_usd:.6f}")
         if res.constraints:

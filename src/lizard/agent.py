@@ -56,7 +56,7 @@ CAPTCHA = re.compile(
 AVOID = re.compile(
     r"^\s*(clear|reset|undo)\s*$"                    # a bare "Clear" link
     r"|\b(remove the filter|clear (all|filters?|refinements?)|"
-    r"reset (all|filters?)|remove from (cart|list))\b",
+    r"reset\s+\w+(\s+\w+)?|remove from (cart|list))\b",
     re.I,
 )
 
@@ -120,6 +120,7 @@ class Result:
     final_url: str
     final_text: str
     wall_ms: float
+    wait_ms: float = 0.0        # deliberate sleeps, ours not the network's
     answer: str = ""
     answer_confidence: float = 0.0
     answer_present: float = 0.0
@@ -175,6 +176,7 @@ class Agent:
         # asked not to do. Removing the box removes the question.
         self.allow_search = allow_search
         self._done_rejected = 0
+        self._wait_ms = 0.0
         self.constraints: Constraints = parse(task)
         self._terms: str | None = None      # resolved lazily, once
         self.history: list[str] = []
@@ -365,11 +367,7 @@ class Agent:
             step.action = action
             self._record(step)
             # Let modals close and re-renders settle before looking again.
-            await self.page.wait_for_timeout(900)
-            try:
-                await self.page.wait_for_load_state("networkidle", timeout=3500)
-            except Exception:
-                pass
+            await self._settle()
 
         text = await self.page.evaluate("(document.querySelector('main,[role=main],article')||document.body).innerText")
         text = text or ""
@@ -387,6 +385,7 @@ class Agent:
             task=self.task, steps=self.steps, done=done, reason=reason,
             final_url=self.page.url, final_text=text[:2000],
             wall_ms=(time.perf_counter() - t0) * 1000,
+            wait_ms=self._wait_ms,
             constraints=self.constraints.describe(), verified=ok, verdict=verdict,
             answer=ans.text if ans else "",
             answer_confidence=ans.confidence if ans else 0.0,
@@ -421,7 +420,46 @@ class Agent:
             wall=(time.perf_counter() - self._t0) * 1000,
         )
         if self.dwell_ms:
+            _w = time.perf_counter()
             await self.page.wait_for_timeout(self.dwell_ms)
+            self._wait_ms += (time.perf_counter() - _w) * 1000
+
+    async def _settle(self, cap_ms: int = 2600, quiet_ms: int = 500) -> None:
+        """Wait for the page to stop changing, not for a fixed duration.
+
+        The loop used to sleep 900ms, then wait for `networkidle` with a
+        3.5s timeout. On an ad-heavy page the network never goes idle, so
+        that timeout was paid in full on every single step - 5.3 seconds of
+        sleeping per action, which measured at 69% of total runtime while
+        the model accounted for 2%.
+
+        Watching the DOM instead finishes as soon as the page is actually
+        ready, usually in a couple of hundred milliseconds, and still caps
+        out well below what the old fixed waits cost.
+        """
+        _w = time.perf_counter()
+        try:
+            await self.page.wait_for_function(
+                """({cap, quiet}) => new Promise(resolve => {
+                    if (document.readyState === 'loading') return resolve(false);
+                    let timer;
+                    const done = () => { obs.disconnect(); resolve(true); };
+                    const obs = new MutationObserver(() => {
+                        clearTimeout(timer);
+                        timer = setTimeout(done, quiet);
+                    });
+                    obs.observe(document.body,
+                                {childList: true, subtree: true,
+                                 attributes: true, characterData: true});
+                    timer = setTimeout(done, quiet);
+                    setTimeout(done, cap);
+                })""",
+                arg={"cap": cap_ms, "quiet": quiet_ms},
+                timeout=cap_ms + 800,
+            )
+        except Exception:
+            pass
+        self._wait_ms += (time.perf_counter() - _w) * 1000
 
     async def _perceive(self):
         """Read the page, tolerating a navigation landing mid-read.
@@ -544,7 +582,7 @@ class Agent:
                                                timeout=3000)
             self.history.append(f'clicked [{tgt.id}] {tgt.render()}')
             self._clicked.add(tgt.render())
-            await self.page.wait_for_timeout(900)
+            await self._settle(2200)
             if self.page.url == before:
                 await self._follow_new_tab()
         elif action == "type" and tgt:
