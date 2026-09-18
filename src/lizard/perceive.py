@@ -77,6 +77,19 @@ _COLLECT_JS = r"""
     return 'body';
   };
 
+  // An open dialog owns the interaction: while one is up, the controls
+  // behind it are unreachable, and wandering off to them mid-flow is how
+  // a multi-step form (set a location, confirm it) gets abandoned halfway.
+  const dialog = [...document.querySelectorAll(
+      '[role=dialog],[aria-modal=true],.a-popover:not([aria-hidden=true]),'
+      + '[class*=modal]:not([aria-hidden=true])')]
+    .find(d => {
+      const r = d.getBoundingClientRect();
+      const s = getComputedStyle(d);
+      return r.width > 120 && r.height > 60
+             && s.visibility !== 'hidden' && s.display !== 'none';
+    }) || null;
+
   const vh = innerHeight, vw = innerWidth;
   const out = [];
   let i = 0;
@@ -94,6 +107,7 @@ _COLLECT_JS = r"""
       y: Math.round(r.top + scrollY),
       typable: ['input', 'textarea'].includes(el.tagName.toLowerCase())
                || el.isContentEditable,
+      inDialog: dialog ? dialog.contains(el) : false,
       disabled: !!el.disabled,
     });
   }
@@ -103,6 +117,7 @@ _COLLECT_JS = r"""
     url: location.href,
     title: document.title,
     text: (main.innerText || '').replace(/\n{3,}/g, '\n\n').trim(),
+    hasDialog: !!dialog,
     scrollY: Math.round(scrollY),
     scrollMax: Math.round(document.body.scrollHeight - innerHeight),
     elements: out,
@@ -118,6 +133,7 @@ class Element:
     name: str
     in_view: bool
     zone: str
+    in_dialog: bool
     y: int
     typable: bool
     disabled: bool
@@ -140,6 +156,7 @@ class Percept:
     elements: list[Element]   # already pruned
     total_found: int          # before pruning
     after_dedupe: int         # after collapsing duplicate targets
+    has_dialog: bool = False  # an open modal owns the interaction
 
 
 # Accelerator hints, skip links and other things that are only ever noise.
@@ -205,6 +222,13 @@ def _protected(el: Element, terms: list[str]) -> bool:
     return bool(terms) and any(t in low for t in terms)
 
 
+# Controls the executor has no way to operate. Offering them is worse than
+# useless: the agent picks the price slider, the click does nothing, and the
+# run burns its budget rediscovering that. Range and file inputs need drag
+# and file-picker gestures this agent does not perform.
+_UNUSABLE = ("input:range", "input:file", "input:color", "input:date")
+
+
 def _dedupe(els: list[Element]) -> list[Element]:
     """Cards often expose the same target three times (image, title, price).
     Keep the best-labelled one per destination and free up the slots."""
@@ -226,14 +250,22 @@ async def perceive(page, task: str = "", limit: int = MAX_ELEMENTS) -> Percept:
     els = [
         Element(
             id=e["id"], role=e["role"], name=e["name"], in_view=e["inView"],
-            zone=e["zone"], y=e["y"], typable=e["typable"], disabled=e["disabled"],
+            zone=e["zone"], in_dialog=e["inDialog"], y=e["y"],
+            typable=e["typable"], disabled=e["disabled"],
         )
         for e in raw["elements"]
     ]
     total = len(els)
 
     terms = [w for w in task.lower().split() if len(w) > 3]
+    els = [e for e in els if e.role not in _UNUSABLE]
     deduped = _dedupe(els)
+
+    # While a dialog is open, it is the only thing the agent may touch.
+    if raw.get("hasDialog"):
+        inside = [e for e in deduped if e.in_dialog]
+        if inside:
+            deduped = inside
 
     keep = [e for e in deduped if _protected(e, terms) and not _JUNK.search(e.name)]
     keep = keep[:limit]
@@ -249,6 +281,7 @@ async def perceive(page, task: str = "", limit: int = MAX_ELEMENTS) -> Percept:
         url=raw["url"], title=raw["title"], text=raw["text"],
         scroll_y=raw["scrollY"], scroll_max=raw["scrollMax"],
         elements=kept, total_found=total, after_dedupe=len(deduped),
+        has_dialog=bool(raw.get("hasDialog")),
     )
 
 
@@ -263,7 +296,10 @@ def render_state(p: Percept, task: str, history: list[str]) -> str:
         "PAGE TEXT:",
         p.text[:3000],
         "",
-        f"INTERACTIVE ELEMENTS ({len(p.elements)} shown of {p.total_found} found):",
+        (f"A DIALOG IS OPEN. Only its controls are listed; finish or close "
+         f"it before anything else."
+         if p.has_dialog else
+         f"INTERACTIVE ELEMENTS ({len(p.elements)} shown of {p.total_found} found):"),
     ]
     lines += [f"  [{e.id}] {e.render()}" for e in p.elements]
     if history:

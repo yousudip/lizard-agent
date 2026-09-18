@@ -113,6 +113,26 @@ class JevBrain:
         return {w.lower() for i, w in enumerate(words)
                 if v[f"w{i}"].value > 0.5}
 
+    def pick_value(self, task: str, field: str,
+                   values: dict[str, str]) -> str:
+        """Which of these literals belongs in this field?
+
+        A task can carry several typeable values - search terms, a PIN
+        code, a price ceiling - and a form has several fields to put them
+        in. Choosing between them is a judgement about what the field is
+        for; the values themselves are all lifted verbatim from the task,
+        so nothing is invented either way.
+        """
+        v = self.jev.ask(
+            f"TASK: {task}\n\nThe agent is about to type into this field:\n"
+            f"  {field}\n\nThese values were taken from the task.",
+            {"value": choice(
+                "Which value belongs in that field?",
+                {k: d for k, d in values.items()},
+            )},
+        )
+        return v["value"].value
+
     def warm(self) -> None:
         self.jev.warm()
 

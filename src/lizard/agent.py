@@ -21,6 +21,7 @@ from .constraints import Constraints, check, parse, prices_in
 from .answer import extract
 from .brain import Decision, JevBrain
 from .overlay import draw
+from .preconditions import apply as apply_preconditions
 from .perceive import perceive, render_state
 
 # Controls that do something irreversible or spend money. Jev is also asked
@@ -170,17 +171,27 @@ class Agent:
         self._seen: set[tuple] = set()
         self._scrolls = 0          # consecutive; scrolling is the fallback,
                                    # so it needs its own escape hatch
+        self._blocked: dict[str, int] = {}   # times an action was suppressed
         self._dead: set[str] = set()   # elements that failed to act; a click
                                        # that times out must not be offered
                                        # again or the agent thrashes on it
 
     async def run(self) -> Result:
         t0 = self._t0 = time.perf_counter()
+
+        # Mechanical, known-in-advance setup happens before the loop, so
+        # the agent's steps are spent on judgement rather than on
+        # rediscovering a fixed modal sequence.
+        if self.constraints:
+            for note in await apply_preconditions(self.page, self.constraints):
+                self.history.append(note)
+                if self.verbose:
+                    print(f"   ·  {note}")
         reason = "step budget exhausted"
         done = False
 
         for n in range(1, self.max_steps + 1):
-            p = await perceive(self.page, self.task)
+            p = await self._perceive()
             # Drop elements that have already failed, and controls that
             # would undo work. Both arms see the same filtered list.
             p.elements = [e for e in p.elements
@@ -247,10 +258,27 @@ class Agent:
                 step.note = f"low target confidence {t_conf:.2f}; scrolling instead"
                 action = "scroll"
 
-            key = (p.url, action, tgt.id if tgt else None)
+            # Key on what the element *is*, not its index. data-lz ids are
+            # reassigned on every perception pass, so an id-keyed memory
+            # never matches and the agent will happily click the same
+            # button twice - which is how a run gets past "Go", applies the
+            # PIN, then clicks "Go" again and loses the thread.
+            key = (p.url, action, tgt.render() if tgt else None)
             if key in self._seen and action != "scroll":
                 step.note = "repeat of an earlier action; scrolling instead"
                 action = "scroll"
+                # Suppression alone is not enough: the element stays in the
+                # action space, gets chosen again next step, is suppressed
+                # again, and the run scrolls to its death. The blacklist
+                # used to fill only on a raised exception, which never
+                # happens for an action that was stopped before it ran.
+                if tgt:
+                    self._blocked[tgt.render()] = \
+                        self._blocked.get(tgt.render(), 0) + 1
+                    if self._blocked[tgt.render()] >= 2:
+                        self._dead.add(tgt.render())
+                        step.note = ("chosen repeatedly without progress; "
+                                     "removing it from the action space")
             self._seen.add(key)
 
             if action == "scroll":
@@ -294,7 +322,12 @@ class Agent:
                     self._dead.add(tgt.render())
             step.action = action
             self._record(step)
-            await self.page.wait_for_timeout(600)
+            # Let modals close and re-renders settle before looking again.
+            await self.page.wait_for_timeout(900)
+            try:
+                await self.page.wait_for_load_state("networkidle", timeout=3500)
+            except Exception:
+                pass
 
         text = await self.page.evaluate("(document.querySelector('main,[role=main],article')||document.body).innerText")
         text = text or ""
@@ -347,6 +380,58 @@ class Agent:
         )
         if self.dwell_ms:
             await self.page.wait_for_timeout(self.dwell_ms)
+
+    async def _perceive(self):
+        """Read the page, tolerating a navigation landing mid-read.
+
+        A click can trigger a redirect that tears down the execution
+        context while the accessibility snapshot is still running. That is
+        normal browsing, not an error, so wait for the new page and look
+        again.
+        """
+        for attempt in range(3):
+            try:
+                return await perceive(self.page, self.task)
+            except Exception as e:
+                if "context was destroyed" not in str(e) and attempt == 2:
+                    raise
+                try:
+                    await self.page.wait_for_load_state(
+                        "domcontentloaded", timeout=8000)
+                except Exception:
+                    pass
+                await self.page.wait_for_timeout(700)
+        return await perceive(self.page, self.task)
+
+    def _value_for(self, tgt) -> str:
+        """Decide what to type into this particular field.
+
+        Always typing the search query was fine while every task had one
+        box to fill. A task like "headphones under Rs 2000 delivered to
+        562125" has two: the PIN belongs in the location field and the
+        query belongs in the search box, and putting either in the other
+        gets nowhere.
+        """
+        options = {"query": f'the search terms: "{self._search_query()}"'}
+        if self.constraints.pincode:
+            options["pincode"] = (f"the postal/PIN code "
+                                  f"{self.constraints.pincode}")
+        if self.constraints.max_price is not None:
+            options["max_price"] = (f"the price ceiling "
+                                    f"{self.constraints.max_price:.0f}")
+        if len(options) == 1 or not hasattr(self.brain, "pick_value"):
+            return self._search_query()
+
+        try:
+            pick = self.brain.pick_value(self.task, tgt.render(), options)
+        except Exception:
+            return self._search_query()
+
+        if pick == "pincode":
+            return self.constraints.pincode or self._search_query()
+        if pick == "max_price":
+            return f"{self.constraints.max_price:.0f}"
+        return self._search_query()
 
     def _search_query(self) -> str:
         """The query to type. Computed once, then reused."""
@@ -405,16 +490,37 @@ class Agent:
                     tgt.selector, "el => el.removeAttribute('target')")
             except Exception:
                 pass
-            await self.page.click(tgt.selector, timeout=6000)
+            try:
+                await self.page.click(tgt.selector, timeout=5000)
+            except Exception:
+                # Some controls are visible to the accessibility tree but
+                # not to a real mouse click - covered by an overlay, or
+                # zero-sized with a clickable parent. Dispatching the event
+                # directly rescues most of them, and it is the difference
+                # between a filter being applied and a wasted step.
+                await self.page.dispatch_event(tgt.selector, "click",
+                                               timeout=3000)
             self.history.append(f'clicked [{tgt.id}] {tgt.render()}')
             await self.page.wait_for_timeout(900)
             if self.page.url == before:
                 await self._follow_new_tab()
         elif action == "type" and tgt:
-            q = self._search_query()
+            q = self._value_for(tgt)
             await self.page.fill(tgt.selector, q, timeout=6000)
-            await self.page.press(tgt.selector, "Enter")
-            self.history.append(f'typed "{q}" into [{tgt.id}]')
+            # Enter submits a search box. It does not submit Amazon's
+            # location modal, which wants its Apply button clicked - and
+            # pressing Enter there silently leaves the PIN unapplied while
+            # looking like it worked. Only auto-submit true search fields;
+            # otherwise leave the next move to the agent, which can see
+            # the Apply button in its action space.
+            is_search = ("search" in tgt.role.lower()
+                         or "search" in tgt.name.lower())
+            if is_search:
+                await self.page.press(tgt.selector, "Enter")
+            self.history.append(
+                f'typed "{q}" into [{tgt.id}] {tgt.render()}'
+                + ("" if is_search else " - now find the button that applies it")
+            )
         elif action == "back":
             await self.page.go_back(timeout=8000)
             self.history.append("went back")
