@@ -143,3 +143,44 @@ async def draw(page, *, task: str, step: int, action: str, conf: float,
         })
     except Exception:
         pass
+
+
+_NOTICE_JS = r"""
+(d) => {
+  if (!document.getElementById('lz-style')) {
+    const st = document.createElement('style');
+    st.id = 'lz-style'; st.textContent = d.css;
+    document.head.appendChild(st);
+  }
+  let hud = document.getElementById('lz-hud');
+  if (!hud) {
+    hud = document.createElement('div');
+    hud.id = 'lz-hud';
+    document.body.appendChild(hud);
+  }
+  hud.innerHTML =
+    `<div class="lz-t">\u{1F98E} lizard \u00b7 no LLM</div>`
+  + `<div class="lz-task">${d.task}</div>`
+  + `<div class="lz-r"><span class="lz-k">step</span>`
+  + `<span class="lz-v lz-act">setup</span></div>`
+  + `<div class="lz-sep"></div>`
+  + `<div class="lz-v" style="text-align:left">${d.text}</div>`
+  + `<div class="lz-why">deterministic code \u2014 no model call. `
+  + `The value came from the task; the sequence never varies.</div>`;
+}
+"""
+
+
+async def notice(page, task: str, text: str) -> None:
+    """Show what is happening before the decision loop starts.
+
+    Setting a delivery PIN takes several seconds of clicking through a
+    modal, and it runs before the first decision - so without this the
+    video opens with the page being manipulated by an invisible hand and
+    no HUD to explain it. Saying "deterministic, no model call" here also
+    makes the architecture visible at exactly the moment it is being used.
+    """
+    try:
+        await page.evaluate(_NOTICE_JS, {"css": _CSS, "task": task, "text": text})
+    except Exception:
+        pass

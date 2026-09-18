@@ -197,7 +197,8 @@ class Agent:
         # the agent's steps are spent on judgement rather than on
         # rediscovering a fixed modal sequence.
         if self.constraints:
-            for note in await apply_preconditions(self.page, self.constraints):
+            for note in await apply_preconditions(
+                    self.page, self.constraints, self.task, self.overlay):
                 self.history.append(note)
                 if self.verbose:
                     print(f"   ·  {note}")
