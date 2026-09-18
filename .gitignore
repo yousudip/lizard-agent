@@ -1,0 +1,9 @@
+# secrets — never commit
+.env
+
+.venv/
+__pycache__/
+*.py[cod]
+traces/
+videos/
+.DS_Store

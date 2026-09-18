@@ -1,0 +1,20 @@
+[project]
+name = "lizard"
+version = "0.1.0"
+license = "MIT"
+keywords = ["browser-automation", "agent", "jev", "typesafe", "playwright"]
+description = "A browser agent with no LLM in the loop — deterministic code plus Jev, a System One model"
+readme = "README.md"
+authors = [
+    { name = "Sudip Bhakta", email = "yousudip@gmail.com" }
+]
+requires-python = ">=3.12"
+dependencies = [
+    "httpx>=0.28.1",
+    "playwright>=1.63.0",
+    "python-dotenv>=1.2.3",
+]
+
+[build-system]
+requires = ["uv_build>=0.12.16,<0.13.0"]
+build-backend = "uv_build"
