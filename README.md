@@ -29,6 +29,13 @@ verified: PASS — ₹749 is within the ₹2,000 limit
 Nobody told it Amazon has a delivery filter. It read the page, found the
 control that satisfied "within 2 days", and used it.
 
+![Lizard running on Amazon](docs/hud.png)
+
+The HUD is injected as real DOM, so Playwright's own video capture records
+it. Green box and tag mark the chosen element and its confidence; faint
+dashed boxes mark everything it was allowed to choose from; the panel shows
+the compute/network split and every signal from that single call.
+
 ## Status
 
 - [x] Perception layer — page → prunable, typed action space

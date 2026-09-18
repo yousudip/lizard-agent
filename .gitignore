@@ -6,4 +6,7 @@ __pycache__/
 *.py[cod]
 traces/
 videos/
+
+# committed documentation assets are kept
+!docs/
 .DS_Store
