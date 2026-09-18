@@ -34,6 +34,11 @@ DEMOS = [
      "find the documentation page for the asyncio gather function", 8,
      "Precision: lands on the exact anchor and quotes the signature."),
 
+    ("stacked", "https://www.amazon.in",
+     "boAt wireless headphones under Rs 2000 with 4 stars and up, "
+     "delivered to 562125 within 2 days", 20,
+     "Five constraints stacked one filter at a time - the long one."),
+
     ("asyncio", "https://docs.python.org/3/",
      "find which exception asyncio.wait_for raises when it times out", 8,
      "Four pages deep, and the answer is a sentence quoted off the page."),
@@ -70,7 +75,8 @@ async def run_one(pw, name, url, task, steps, note, a):
         try:
             brain.warm()                 # pay TLS before the clock starts
             agent = Agent(page, brain, task, max_steps=steps,
-                          overlay=True, dwell_ms=a.dwell)
+                          overlay=True, dwell_ms=a.dwell,
+                          min_confidence=0.1 if name == "stacked" else 0.25)
             res = await agent.run()
         finally:
             brain.close()

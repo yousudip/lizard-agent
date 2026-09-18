@@ -143,6 +143,7 @@ uv run python scripts/demo.py --only amazon --headed
 
 | demo | steps | thinking | cost | result |
 |---|---|---|---|---|
+| stacked | 11 | 1112 ms | $0.00210 | five constraints, one filter at a time — **₹1,598, PIN + 2-day verified** |
 | asyncio | 5 | 270 ms | $0.00072 | `"If a timeout occurs, it cancels aw and raises TimeoutError."` |
 | amazon | 3 | 269 ms | $0.00077 | pTron Studio Pro — **₹799 verified against the ₹2000 limit** |
 | pydocs | 7 | 691 ms | $0.00141 | `awaitable asyncio.gather(*aws, return_exceptions=False)` |
@@ -193,15 +194,30 @@ Two consequences worth knowing:
   toward Biology to reach Photosynthesis"), and without one the agent
   wanders into Wikipedia's own meta-pages. Hierarchical drill-down, where
   each step is locally obvious, is the shape that suits a System One model.
-- **Long filter-heavy runs tend to end `stuck`.** Stacking five constraints
-  on a results page reaches 11-12 steps and applies most of the filters,
-  then the agent starts preferring `scroll` over clicking and runs out the
-  budget near the bottom of the page.
+- **Long runs over-filter.** Stacking five constraints reaches 11 steps and
+  verifies all of them, but the agent keeps applying filters past the point
+  of usefulness ("Free Shipping", "3 & above") rather than opening a result.
 - **Query wording is the soft spot.** Search terms are *selected* from the
   user's own words by a fanned-out yes/no per word — never generated. It
   handles "which words name the thing" well; it is not a query writer.
 - **Bot challenges end the run.** By design — PyPI's search is behind one,
   and the agent stops rather than attempting to get past it.
+
+## Two fixes worth knowing about
+
+**Wording drove a whole failure mode.** The `scroll` action was described as
+"Scroll down to reveal more of the page", which reads as correct whenever the
+element you want is below the fold — on a filter sidebar, most of them. The
+agent would target the right filter at good confidence and then scroll toward
+it, repeatedly, until the budget ran out. It never needed to: the executor
+clicks by selector and the browser scrolls the element into view itself, so a
+listed off-screen element is exactly as clickable as a visible one. Rewriting
+`scroll` as "only useful for elements *not* already in the list" removed the
+scrolling entirely.
+
+**One word undid ten steps.** The agent clicked a bare "Clear" link and wiped
+every filter it had applied. The guard matched "Clear all" and "Clear filters"
+but not "Clear" on its own.
 
 ## Confidence is load-bearing
 

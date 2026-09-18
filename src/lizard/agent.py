@@ -54,8 +54,9 @@ CAPTCHA = re.compile(
 # a destructive action, only a wrong one. Wrong choices deserve exclusion
 # and another go; irreversible ones deserve a full stop.
 AVOID = re.compile(
-    r"\b(remove the filter|clear (all|filters?)|reset|undo|"
-    r"remove from (cart|list))\b",
+    r"^\s*(clear|reset|undo)\s*$"                    # a bare "Clear" link
+    r"|\b(remove the filter|clear (all|filters?|refinements?)|"
+    r"reset (all|filters?)|remove from (cart|list))\b",
     re.I,
 )
 

@@ -29,10 +29,26 @@ class Decision:
         return max(self.latency_ms - self.compute_ms, 0.0)
 
 
+# The wording of these matters more than it looks.
+#
+# "Scroll down to reveal more of the page" reads as the correct move
+# whenever the element you want is below the fold - and on a filter-heavy
+# results page that is most of them. The agent would target the brand
+# filter it wanted at good confidence and then scroll toward it, again and
+# again, until the step budget ran out.
+#
+# It never needed to. The executor clicks by selector, and the browser
+# scrolls the element into view itself, so an off-screen element in the
+# list is exactly as clickable as one on screen. Scrolling is only useful
+# for finding elements that are *not* in the list at all.
 ACTIONS = {
-    "click": "Click one of the listed elements to make progress",
-    "type": "Type the search terms into a text input",
-    "scroll": "Scroll down to reveal more of the page",
+    "click": "Click one of the listed elements. Every element in the list "
+             "can be clicked right now, whether or not it is currently "
+             "visible on screen - there is no need to scroll to it first.",
+    "type": "Type into one of the listed text inputs",
+    "scroll": "Only useful to load or reveal elements that are NOT already "
+              "in the list, such as results further down an infinite feed. "
+              "If the element you want is listed, click it instead.",
     "back": "This page was a dead end; return to the previous one",
     "done": "The task is complete; the answer is on this page",
 }
