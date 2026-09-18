@@ -45,7 +45,9 @@ the compute/network split and every signal from that single call.
 - [x] Trace logger — JSONL, one line per decision
 - [x] Overlay / HUD — decisions painted onto the page, captured on video
 - [x] Compute vs network split — measured, not estimated
-- [x] Side-by-side race runner
+- [x] Jev-selected search terms — fanned-out yes/no per candidate word
+- [x] Extractive answers — the answer is located, never composed
+- [x] CAPTCHA detection — stops, does not attempt to bypass
 
 ## Runs
 
@@ -64,26 +66,6 @@ uv run python scripts/run.py https://www.amazon.in "<task>" \
 uv run python scripts/race.py https://github.com/langchain-ai/langchain \
   "find the contributing guidelines document" --headed --video videos
 ```
-
-## Fairness of the race
-
-The two arms share the perception layer, the 255-element cap, the executor,
-every deterministic guard, and the warmup. The only thing that differs is
-the object that answers `decide(state, elements)` — `JevBrain` or
-`ClaudeBrain`. Anything else would make the comparison meaningless.
-
-Both are asked for the same seven typed signals; the LLM arm gets them via
-structured outputs so the comparison is decision-for-decision.
-
-Run with `--sequential` for clean timing (the two arms otherwise share
-bandwidth) and without it for the video.
-
-| task | steps | Jev time | wall | cost | outcome |
-|---|---|---|---|---|---|
-| GitHub → contributing guide | 3 | 1.6s | 3.3s | $0.00075 | crossed to docs.langchain.com |
-| Amazon → headphone under ₹2000, 2-day | 5 | 2.4s | 8.4s | $0.0021 | ₹749, delivery filter applied |
-
-Zero LLM calls in either.
 
 ## Perception benchmarks
 
@@ -151,55 +133,69 @@ than a page load and slower than one.
 They evaluate in parallel, so there is no reason to ask one thing at a time.
 Fan out everything you might need in a single call.
 
-## Race results
 
-`google/gemini-2.5-flash-lite` — deliberately the hardest baseline. The
-objection to a System One model is "why not just use a small fast LLM?",
-so the comparison worth publishing is against the fastest cheap generalist,
-not a frontier model that was never going to win a latency race.
+## The demo reel
 
-| task | arm | steps | per decision | cost | outcome |
-|---|---|---|---|---|---|
-| GitHub → contributing guide | jev | 3 | 481 ms | $0.00070 | done |
-| | llm | 3 | 1005 ms | $0.00062 | done |
-| Amazon → headphone under ₹2000 | jev | 5 | 529 ms | $0.00174 | **done** |
-| | llm | 5 | 1072 ms | $0.00211 | **stuck** |
+```bash
+uv run python scripts/demo.py              # all five, recorded to videos/
+uv run python scripts/demo.py --only amazon --headed
+```
 
-**2.0–2.1x faster per decision as measured from Bengaluru.**
+| demo | steps | thinking | cost | result |
+|---|---|---|---|---|
+| amazon | 3 | 269 ms | $0.00077 | pTron Studio Pro — **₹799 verified against the ₹2000 limit** |
+| pydocs | 7 | 691 ms | $0.00141 | `awaitable asyncio.gather(*aws, return_exceptions=False)` |
+| github | 3 | 603 ms | $0.00075 | crossed to docs.langchain.com unprompted |
+| wikipedia | 2 | 359 ms | $0.00096 | Kolkata Metro |
+| pypi | 2 | 88 ms | $0.00010 | detected a bot challenge and stopped |
 
-### The networks are not equidistant
+**The model is 3–5% of elapsed time in every run.** Page loads are the rest.
 
-| host | TCP RTT from Bengaluru |
+Each clip lands in `videos/<name>/` as a single `.webm`. The overlay is real
+DOM, so Playwright's own capture records it — no screen recorder needed.
+
+## Why the HUD shows two numbers
+
+Each decision costs `compute + network`, and they are measured separately —
+the API's proxy returns `x-envoy-upstream-service-time`, so the split is
+read, not inferred.
+
+| | typical |
 |---|---|
-| openrouter.ai | **14 ms** (CDN edge in India) |
-| api.typesafe.ai | **250–271 ms** (US origin) |
+| Jev compute | **~100 ms** |
+| Bengaluru ↔ US round trip | **~250 ms** |
 
-Jev pays a quarter-second geographic tax per call that the baseline does
-not. Subtracting one round trip from each side: **4.1–4.2x faster**
-(258 ms vs 1058 ms per decision). Both numbers belong in any honest
-write-up — a user in India really does pay that 250 ms.
+TypeSafe serves from the US and has no Indian PoP, so a call from here pays
+a quarter-second of distance before the model does anything. That is physics,
+not the model: the same call from a US host would be ~100 ms end to end.
 
-### Cost is a wash — say so
+Two consequences worth knowing:
 
-**0.8–1.2x.** Against Flash Lite, Jev is somewhere between slightly cheaper
-and slightly more expensive. The 400x figure is real against frontier
-models and irrelevant here. The story against Flash Lite is latency and
-reliability, not price.
+- **Connection pooling is worth 3x.** A fresh TLS handshake costs two extra
+  round trips. Unpooled, decisions took a measured 1066 ms; pooled, 349 ms.
+  It is one line of client config and it is the difference between the model
+  being faster than a page load and slower than one.
+- **Fan-out is free, and so is a big action space.** 1 question 368 ms,
+  15 questions 356 ms. A 5-option choice 63–116 ms of compute, a 255-option
+  choice 81–127 ms. There is no reason to ask one thing at a time, and no
+  reason to keep the action space small.
 
-### Calibration is the more interesting result
+## What it cannot do
 
-From the Amazon traces, the baseline stuck in a scroll loop:
+- **No vision.** Accessibility-tree only. Canvas-heavy or unlabelled sites defeat it.
+- **No synthesis.** Answers are extracted spans, never composed prose.
+- **Weak multi-hop reasoning.** There is no reasoner in the loop.
+- **Query wording is the soft spot.** Search terms are *selected* from the
+  user's own words by a fanned-out yes/no per word — never generated. It
+  handles "which words name the thing" well; it is not a query writer.
+- **Bot challenges end the run.** By design — PyPI's search is behind one,
+  and the agent stops rather than attempting to get past it.
 
-```
-llm   2. scroll  conf=0.80
-      3. scroll  conf=0.80
-      4. scroll  conf=1.00     looping: 0.0
-      5. stuck                 <- our deterministic guard, not its own judgement
-```
+## Confidence is load-bearing
 
-It reported `looping: 0.0` **while visibly looping**, at confidence 1.00.
-
-Jev on the same task: 0.91 on the obvious search box, 0.56 when unsure,
-0.17 on an ambiguous final step — and it finished. The confidence tracked
-reality instead of decorating it. For a system that gates actions on
-confidence, that difference matters more than the milliseconds.
+The signals are not decoration. `done` is a *claim*, and a hesitant one gets
+rejected: on Amazon the agent first called the task complete while still on
+the search-results page, with `complete` at 0.43. The loop pushed it one
+level deeper, onto the product page, where the price could actually be
+checked. Ungated, that run would have "succeeded" without ever verifying
+the constraint it was given.

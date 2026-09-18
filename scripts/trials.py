@@ -21,13 +21,28 @@ from lizard.brain import JevBrain                           # noqa: E402
 from lizard.config import OPENROUTER_MODEL                  # noqa: E402
 from lizard.openrouter import OpenRouterBrain               # noqa: E402
 
+import re
+
+# Each task carries a ground-truth check. An agent's own `done` flag is a
+# claim, not a result: on the pypi task the LLM baseline reported done with
+# confidence 1.00 while sitting on a search-results page that never held
+# the answer. Scoring self-reported success rewards overconfidence, so the
+# benchmark checks the final page instead.
 TASKS = [
     ("github", "https://github.com/langchain-ai/langchain",
-     "find the contributing guidelines document for this project", 8),
+     "find the contributing guidelines document for this project", 8,
+     lambda url, text: bool(re.search(r"contribut", url, re.I))),
+
     ("amazon", "https://www.amazon.in",
-     "find a wireless headphone under Rs 2000 delivered within 2 days", 10),
+     "find a wireless headphone under Rs 2000 delivered within 2 days", 10,
+     # a real product page, and the price constraint actually verified
+     lambda url, text: "/dp/" in url or "/gp/product/" in url),
+
     ("pypi", "https://pypi.org",
-     "find the latest released version of the langchain package", 8),
+     "find the latest released version of the langchain package", 8,
+     # must be on langchain's project page with a version string visible
+     lambda url, text: bool(re.search(r"/project/langchain", url, re.I))
+                       and bool(re.search(r"\b\d+\.\d+\.\d+\b", text))),
 ]
 
 
@@ -43,7 +58,7 @@ def rtt_ms(host, port=443, n=3):
     return statistics.median(out) if out else 0.0
 
 
-async def one(pw, brain, url, task, steps):
+async def one(pw, brain, url, task, steps, expect=None):
     browser = await pw.chromium.launch(headless=True)
     page = await browser.new_page(viewport={"width": 1440, "height": 900})
     try:
@@ -52,8 +67,10 @@ async def one(pw, brain, url, task, steps):
         brain.warm()
         res = await Agent(page, brain, task, max_steps=steps,
                           verbose=False).run()
+        passed = bool(expect(res.final_url, res.final_text)) if expect else res.done
         return {
-            "done": res.done,
+            "done": res.done,          # what the agent claimed
+            "passed": passed,          # what actually happened
             "steps": len(res.steps),
             "per_decision_ms": res.jev_ms / max(len(res.steps), 1),
             "compute_ms": res.compute_ms / max(len(res.steps), 1),
@@ -62,7 +79,7 @@ async def one(pw, brain, url, task, steps):
             "verified": res.verified,
         }
     except Exception as e:
-        return {"done": False, "steps": 0, "per_decision_ms": 0.0,
+        return {"done": False, "passed": False, "steps": 0, "per_decision_ms": 0.0,
                 "compute_ms": 0.0, "wall_ms": 0.0, "cost": 0.0,
                 "error": f"{type(e).__name__}: {str(e)[:80]}"}
     finally:
@@ -76,7 +93,8 @@ def summarise(runs):
     lat = sorted(r["per_decision_ms"] for r in ok)
     return {
         "n": len(runs),
-        "completed": sum(1 for r in runs if r["done"]),
+        "claimed": sum(1 for r in runs if r["done"]),
+        "passed": sum(1 for r in runs if r.get("passed")),
         "median_ms": statistics.median(lat),
         "min_ms": lat[0],
         "max_ms": lat[-1],
@@ -111,7 +129,7 @@ async def main() -> int:
            "trials": a.trials, "rtt_ms": rtts, "tasks": {}}
 
     async with async_playwright() as pw:
-        for name, url, task, steps in tasks:
+        for name, url, task, steps, expect in tasks:
             print(f"  {name}")
             out["tasks"][name] = {"task": task, "url": url}
             for arm in ("jev", "llm"):
@@ -120,11 +138,14 @@ async def main() -> int:
                     brain = (JevBrain() if arm == "jev"
                              else OpenRouterBrain(model=model))
                     try:
-                        r = await one(pw, brain, url, task, steps)
+                        r = await one(pw, brain, url, task, steps, expect)
                     finally:
                         brain.close()
                     runs.append(r)
-                    mark = "." if r["done"] else "x"
+                    # distinguish a real pass from a claimed one
+                    mark = {(True, True): ".", (True, False): "!",
+                            (False, False): "x",
+                            (False, True): "?"}[(r["done"], r.get("passed", False))]
                     print(f"    {arm} {i+1}/{a.trials} {mark} "
                           f"{r['per_decision_ms']:.0f}ms/decision", flush=True)
                 s = summarise(runs)
@@ -135,19 +156,22 @@ async def main() -> int:
     Path(a.out).write_text(json.dumps(out, indent=2))
 
     # ---- report ----
-    print(f"  {'task':<9}{'arm':<5}{'done':>8}{'median':>11}"
+    print("\n  .=passed  !=claimed done but failed the check  x=gave up\n")
+    print(f"  {'task':<9}{'arm':<5}{'passed':>8}{'claimed':>9}{'median':>11}"
           f"{'range':>16}{'steps':>7}{'cost':>11}")
-    print("  " + "-" * 67)
+    print("  " + "-" * 76)
     for name in out["tasks"]:
         for arm in ("jev", "llm"):
             s = out["tasks"][name][arm]["summary"]
             if not s:
                 print(f"  {name:<9}{arm:<5}{'all failed':>8}")
                 continue
-            done = f"{s['completed']}/{s['n']}"
+            done = f"{s['passed']}/{s['n']}"
             rng = f"{s['min_ms']:.0f}-{s['max_ms']:.0f}ms"
             cost = "$" + format(s["median_cost"], ".5f")
-            print(f"  {name:<9}{arm:<5}{done:>8}{s['median_ms']:>9.0f}ms"
+            claimed = f"{s['claimed']}/{s['n']}"
+            print(f"  {name:<9}{arm:<5}{done:>8}{claimed:>9}"
+                  f"{s['median_ms']:>9.0f}ms"
                   f"{rng:>16}{s['median_steps']:>7.0f}{cost:>11}")
 
     # Same round trip removed from each side, as in scripts/race.py.

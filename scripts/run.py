@@ -58,6 +58,10 @@ async def main() -> int:
         p = res.save(a.trace)
         print(f"\n  {'done' if res.done else 'stopped'}: {res.reason}")
         print(f"  final url  : {res.final_url[:78]}")
+        if res.answer:
+            print(f"\n  ANSWER     : {res.answer[:100]}")
+            print(f"  confidence : {res.answer_confidence:.2f}  "
+                  f"(answer present on page: {res.answer_present:.2f})\n")
         print(f"  steps      : {len(res.steps)}")
         print(f"  jev total  : {res.jev_ms:.0f} ms "
               f"({100*res.jev_ms/max(res.wall_ms,1):.0f}% of wall)")

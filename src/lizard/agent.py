@@ -18,6 +18,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
 from .constraints import Constraints, check, parse, prices_in
+from .answer import extract
 from .brain import Decision, JevBrain
 from .overlay import draw
 from .perceive import perceive, render_state
@@ -31,6 +32,18 @@ DENYLIST = re.compile(
     r"confirm (order|purchase|payment)|add payment|"
     r"delete (account|item|order)|deactivate|close account|"
     r"unsubscribe|sign out|log out)\b",
+    re.I,
+)
+
+# Bot challenges. Hitting one is a stop condition, not an obstacle to work
+# around: the agent reports it and ends the run. Detecting it explicitly
+# also keeps a CAPTCHA from looking like a model failure - without this the
+# agent thrashes against a page it can never get past, and the trace makes
+# it look as though it simply could not decide what to do.
+CAPTCHA = re.compile(
+    r"enter the characters|unusual traffic|verify you are|are you a robot|"
+    r"security check|captcha|prove you.{0,10}human|"
+    r"to discuss automated access",
     re.I,
 )
 
@@ -52,16 +65,28 @@ STOPWORDS = {
 }
 
 
-def search_terms(task: str) -> str:
-    """Build a query from the user's own words - selection, not generation.
+def candidate_terms(task: str) -> list[str]:
+    """Words from the task that could plausibly belong in a search box.
 
-    Nothing here is invented: every token in the output appeared in the
-    task. Constraint clauses (prices, durations) are dropped because they
-    belong to the deterministic filters, not the search box.
+    Constraint clauses (prices, durations) are dropped here because they
+    belong to the deterministic filters, not the query.
     """
     cleaned = re.sub(r"\b(under|below|above|within)\s+\S+\s*\d*\b", " ", task, flags=re.I)
     cleaned = re.sub(r"[^\w\s]", " ", cleaned)
-    words = [w for w in cleaned.split() if w.lower() not in STOPWORDS and not w.isdigit()]
+    return [w for w in cleaned.split()
+            if w.lower() not in STOPWORDS and not w.isdigit()][:12]
+
+
+def search_terms(task: str, keep: set[str] | None = None) -> str:
+    """Build a query from the user's own words - selection, not generation.
+
+    Nothing here is invented: every token appeared in the task. `keep`,
+    when supplied, is the subset Jev judged to be naming the thing rather
+    than describing it - see JevBrain.pick_terms.
+    """
+    words = candidate_terms(task)
+    if keep:
+        words = [w for w in words if w.lower() in keep] or words
     return " ".join(words[:8])
 
 
@@ -93,6 +118,9 @@ class Result:
     final_url: str
     final_text: str
     wall_ms: float
+    answer: str = ""
+    answer_confidence: float = 0.0
+    answer_present: float = 0.0
     constraints: str = ""
     verified: bool | None = None
     verdict: str = ""
@@ -126,13 +154,17 @@ class Result:
 class Agent:
     def __init__(self, page, brain, task: str, max_steps: int = 20,
                  min_confidence: float = 0.25, verbose: bool = True,
-                 overlay: bool = False, dwell_ms: int = 0):
+                 overlay: bool = False, dwell_ms: int = 0,
+                 done_confidence: float = 0.6):
         self.page, self.brain, self.task = page, brain, task
         self.max_steps, self.min_confidence = max_steps, min_confidence
         self.verbose = verbose
         self.overlay = overlay
         self.dwell_ms = dwell_ms      # pause after painting, for recording
+        self.done_confidence = done_confidence
+        self._done_rejected = 0
         self.constraints: Constraints = parse(task)
+        self._terms: str | None = None      # resolved lazily, once
         self.history: list[str] = []
         self.steps: list[Step] = []
         self._seen: set[tuple] = set()
@@ -143,7 +175,7 @@ class Agent:
                                        # again or the agent thrashes on it
 
     async def run(self) -> Result:
-        t0 = time.perf_counter()
+        t0 = self._t0 = time.perf_counter()
         reason = "step budget exhausted"
         done = False
 
@@ -154,6 +186,19 @@ class Agent:
             p.elements = [e for e in p.elements
                           if e.render() not in self._dead
                           and not AVOID.search(e.name)] or p.elements
+            # A bot challenge ends the run. We do not attempt to solve it.
+            if CAPTCHA.search(p.text[:1500]) or any(
+                    CAPTCHA.search(e.name) for e in p.elements[:60]):
+                self._record(Step(
+                    n=n, url=p.url, action="captcha", action_conf=0.0,
+                    target_id=None, target_name="", target_conf=0.0,
+                    latency_ms=0.0, compute_ms=0.0, network_ms=0.0,
+                    cost_usd=0.0, elements_shown=len(p.elements),
+                    elements_found=p.total_found,
+                    note="bot challenge detected; stopping"))
+                reason = "hit a bot challenge (not bypassed)"
+                break
+
             state = render_state(p, self.task, self.history[-6:])
             if self.constraints:
                 state += f"\n\nCONSTRAINTS (already parsed): {self.constraints.describe()}" 
@@ -220,10 +265,23 @@ class Agent:
                 self._scrolls = 0
 
             if action == "done":
-                step.action = "done"
-                self._record(step)
-                done, reason = True, "Jev reported the task complete"
-                break
+                # "done" is a claim, and a hesitant one deserves scepticism.
+                # Left ungated, the agent stops on a search-results page
+                # that merely *contains* plausible answers - `complete` sat
+                # at 0.52 there, which is the model saying it is unsure,
+                # not that it has finished. Push it to go one level deeper.
+                unsure = d.signals.get("complete", 1.0) < self.done_confidence
+                if unsure and self._done_rejected < 2 and n < self.max_steps:
+                    self._done_rejected += 1
+                    step.note = (f"done claimed at complete="
+                                 f"{d.signals.get('complete', 0):.2f}; "
+                                 f"looking closer")
+                    action = "click" if tgt else "scroll"
+                else:
+                    step.action = "done"
+                    self._record(step)
+                    done, reason = True, "task reported complete"
+                    break
 
             # ---- act ----
             try:
@@ -242,11 +300,22 @@ class Agent:
         text = text or ""
         ok, verdict = check(text[:6000], self.constraints,
                             price=await self._dom_price())
+
+        # Locate the answer rather than compose it.
+        ans = None
+        if getattr(self.brain, "jev", None) is not None:
+            try:
+                ans = await extract(self.page, self.brain.jev, self.task)
+            except Exception:
+                ans = None
         return Result(
             task=self.task, steps=self.steps, done=done, reason=reason,
             final_url=self.page.url, final_text=text[:2000],
             wall_ms=(time.perf_counter() - t0) * 1000,
             constraints=self.constraints.describe(), verified=ok, verdict=verdict,
+            answer=ans.text if ans else "",
+            answer_confidence=ans.confidence if ans else 0.0,
+            answer_present=ans.present if ans else 0.0,
         )
 
     async def _follow_new_tab(self) -> bool:
@@ -273,9 +342,25 @@ class Agent:
             shown=len(p.elements), found=p.total_found,
             compute=d.compute_ms, network=d.network_ms,
             signals=step.signals, cost=self.brain.total_cost, denied=denied,
+            cum_compute=sum(x.compute_ms for x in self.steps) + d.compute_ms,
+            wall=(time.perf_counter() - self._t0) * 1000,
         )
         if self.dwell_ms:
             await self.page.wait_for_timeout(self.dwell_ms)
+
+    def _search_query(self) -> str:
+        """The query to type. Computed once, then reused."""
+        if self._terms is not None:
+            return self._terms
+        words = candidate_terms(self.task)
+        keep = None
+        if len(words) > 2 and hasattr(self.brain, "pick_terms"):
+            try:
+                keep = self.brain.pick_terms(self.task, words)
+            except Exception:
+                keep = None
+        self._terms = search_terms(self.task, keep)
+        return self._terms
 
     async def _dom_price(self) -> float | None:
         """Read the price out of the markup rather than the rendered text.
@@ -285,7 +370,7 @@ class Agent:
         which number on the page is the one that matters.
         """
         try:
-            raw = await self.page.evaluate("""(() => {
+            raw = await self.page.evaluate(r"""(() => {
               const SEL = [
                 'meta[property="product:price:amount"]',
                 '[itemprop=price]',
@@ -311,13 +396,22 @@ class Agent:
     async def _execute(self, action: str, tgt, p) -> None:
         if action == "click" and tgt:
             before = self.page.url
+            # Navigate in place. Search results routinely carry
+            # target="_blank"; letting them open a tab means the agent has
+            # to chase it, and Playwright records each page to its own
+            # video file, so one run arrives as two half-clips.
+            try:
+                await self.page.eval_on_selector(
+                    tgt.selector, "el => el.removeAttribute('target')")
+            except Exception:
+                pass
             await self.page.click(tgt.selector, timeout=6000)
             self.history.append(f'clicked [{tgt.id}] {tgt.render()}')
             await self.page.wait_for_timeout(900)
             if self.page.url == before:
                 await self._follow_new_tab()
         elif action == "type" and tgt:
-            q = search_terms(self.task)
+            q = self._search_query()
             await self.page.fill(tgt.selector, q, timeout=6000)
             await self.page.press(tgt.selector, "Enter")
             self.history.append(f'typed "{q}" into [{tgt.id}]')

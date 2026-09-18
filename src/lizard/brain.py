@@ -84,6 +84,35 @@ class JevBrain:
             input_tokens=v.input_tokens, output_tokens=v.output_tokens,
         )
 
+    def pick_terms(self, task: str, words: list[str]) -> set[str]:
+        """Which of these words name the thing being looked for?
+
+        This is where free fan-out earns its keep: one question per
+        candidate word, all in a single call, for the price of one.
+
+        The problem it solves is real. "find the latest released version of
+        the langchain package" survives stopword removal as "latest
+        released version langchain package", which searches a package
+        index for the word "version" and finds nothing. Telling "langchain"
+        (a name) from "version" (a property of it) is a judgement, and a
+        regex cannot make it.
+
+        Still selection, not generation: every word came from the task.
+        """
+        qs = {
+            f"w{i}": noul(
+                f'Typing into a search box to find what the task asks for: '
+                f'does the word "{w}" help identify the item itself - its '
+                f'name, kind, brand or a distinguishing feature? Answer no '
+                f'if it instead describes what the user wants to know about '
+                f'the item, or a constraint on delivery, price or recency.'
+            )
+            for i, w in enumerate(words)
+        }
+        v = self.jev.ask(f"TASK: {task}", qs)
+        return {w.lower() for i, w in enumerate(words)
+                if v[f"w{i}"].value > 0.5}
+
     def warm(self) -> None:
         self.jev.warm()
 

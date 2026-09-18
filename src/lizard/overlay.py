@@ -11,7 +11,7 @@ It is injected as real DOM, so Playwright's own video capture records it.
 from __future__ import annotations
 
 _CSS = """
-#lz-hud{position:fixed;top:0;right:0;z-index:2147483647;width:300px;
+#lz-hud{position:fixed;top:0;right:0;z-index:2147483647;width:286px;
  font:12px/1.45 ui-monospace,SFMono-Regular,Menlo,monospace;
  background:rgba(12,14,18,.94);color:#e6edf3;padding:12px 14px;
  border-bottom-left-radius:10px;box-shadow:0 6px 28px rgba(0,0,0,.45);
@@ -23,9 +23,14 @@ _CSS = """
 #lz-hud .lz-v{color:#e6edf3;text-align:right;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 #lz-hud .lz-act{color:#79c0ff;font-weight:700}
 #lz-hud .lz-sep{height:1px;background:#30363d;margin:9px 0}
-#lz-hud .lz-bar{height:5px;background:#21262d;border-radius:3px;overflow:hidden;display:flex;margin-top:3px}
+#lz-hud .lz-bar{height:7px;background:#21262d;border-radius:4px;overflow:hidden;display:flex;margin:5px 0 3px}
 #lz-hud .lz-c{background:#7ee787}
-#lz-hud .lz-n{background:#484f58}
+#lz-hud .lz-n{background:#f0883e}
+#lz-hud .lz-big{font-size:21px;font-weight:700;color:#7ee787;line-height:1.1}
+#lz-hud .lz-unit{font-size:11px;color:#8b949e;font-weight:400}
+#lz-hud .lz-net{color:#f0883e}
+#lz-hud .lz-why{color:#8b949e;font-size:10px;line-height:1.4;margin-top:6px;
+ padding-top:6px;border-top:1px dashed #30363d}
 #lz-hud .lz-sig{display:flex;justify-content:space-between;font-size:11px;margin:2px 0}
 .lz-cand{outline:1.5px dashed rgba(121,192,255,.40)!important;outline-offset:1px!important}
 .lz-pick{outline:3px solid #7ee787!important;outline-offset:2px!important;
@@ -77,6 +82,7 @@ _JS = r"""
   if (!hud) { hud = document.createElement('div'); hud.id = 'lz-hud'; document.body.appendChild(hud); }
 
   const pct = d.total ? Math.max(4, Math.round(100 * d.compute / d.total)) : 0;
+  const share = d.wall ? Math.round(100 * d.cumCompute / d.wall) : null;
   const row = (k, v, cls) => `<div class="lz-r"><span class="lz-k">${k}</span><span class="lz-v ${cls||''}">${v}</span></div>`;
   const sig = (k, v) => {
     const g = Math.round(255 - v*130), b = Math.round(120 + v*60);
@@ -92,10 +98,25 @@ _JS = r"""
   + row('confidence', (d.conf*100).toFixed(0) + '%')
   + row('choices', d.shown + ' of ' + d.found)
   + `<div class="lz-sep"></div>`
-  + row('compute', d.compute.toFixed(0) + ' ms')
-  + row('network', d.network.toFixed(0) + ' ms')
+  + `<div class="lz-big">${d.compute.toFixed(0)}<span class="lz-unit"> ms thinking</span></div>`
+  + `<div class="lz-r"><span class="lz-k">network</span>`
+  + `<span class="lz-v lz-net">+${d.network.toFixed(0)} ms</span></div>`
   + `<div class="lz-bar"><div class="lz-c" style="width:${pct}%"></div>`
   + `<div class="lz-n" style="width:${100-pct}%"></div></div>`
+  + `<div class="lz-why">`
+  + `<span style="color:#7ee787">&#9632;</span> model &nbsp;`
+  + `<span style="color:#f0883e">&#9632;</span> Bengaluru &#8596; US round trip<br>`
+  // Describe the bar that is actually on screen. An earlier version
+  // hardcoded "the model is the small half", which was plainly false on
+  // any call where compute ran high - a caption contradicting its own
+  // chart is worse than no caption.
+  + (d.network > d.compute * 1.5
+       ? `most of this wait is distance, not thinking`
+       : d.compute > d.network * 1.5
+         ? `this call was compute-bound, not network-bound`
+         : `thinking and distance cost about the same here`)
+  + (share !== null ? `<br>thinking so far: <b>${share}%</b> of elapsed time` : '')
+  + `</div>`
   + `<div class="lz-sep"></div>`
   + Object.entries(d.signals || {}).map(([k, v]) => sig(k, v)).join('')
   + `<div class="lz-sep"></div>`
@@ -107,7 +128,8 @@ _JS = r"""
 async def draw(page, *, task: str, step: int, action: str, conf: float,
                pick: int | None, candidates: list[int], shown: int, found: int,
                compute: float, network: float, signals: dict, cost: float,
-               denied: bool = False) -> None:
+               denied: bool = False, cum_compute: float = 0.0,
+               wall: float = 0.0) -> None:
     """Paint the current decision onto the page. Never raises - a failed
     overlay must not take the run down with it."""
     try:
@@ -116,6 +138,7 @@ async def draw(page, *, task: str, step: int, action: str, conf: float,
             "conf": conf, "pick": pick, "candidates": candidates[:120],
             "shown": shown, "found": found, "compute": compute,
             "network": network, "total": compute + network,
+            "cumCompute": cum_compute, "wall": wall,
             "signals": signals, "cost": cost, "denied": denied,
         })
     except Exception:
