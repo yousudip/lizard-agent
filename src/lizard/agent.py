@@ -299,6 +299,22 @@ class Agent:
             else:
                 self._scrolls = 0
 
+            # The answer being visibly present is itself a stopping
+            # condition. Without this the agent lands on the right anchor,
+            # reports answer_here at 0.86, and then scrolls past it until
+            # the loop calls the run stuck - a navigation success recorded
+            # as a failure.
+            if (action != "done"
+                    and d.signals.get("answer_here", 0) >= 0.8
+                    and d.signals.get("progress", 0) >= 1.6
+                    and n > 1):
+                step.action = "done"
+                step.note = (f"answer visible on this page "
+                             f"(answer_here={d.signals['answer_here']:.2f})")
+                self._record(step)
+                done, reason = True, "answer located on the page"
+                break
+
             if action == "done":
                 # "done" is a claim, and a hesitant one deserves scepticism.
                 # Left ungated, the agent stops on a search-results page

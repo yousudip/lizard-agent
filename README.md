@@ -143,6 +143,7 @@ uv run python scripts/demo.py --only amazon --headed
 
 | demo | steps | thinking | cost | result |
 |---|---|---|---|---|
+| asyncio | 5 | 270 ms | $0.00072 | `"If a timeout occurs, it cancels aw and raises TimeoutError."` |
 | amazon | 3 | 269 ms | $0.00077 | pTron Studio Pro — **₹799 verified against the ₹2000 limit** |
 | pydocs | 7 | 691 ms | $0.00141 | `awaitable asyncio.gather(*aws, return_exceptions=False)` |
 | github | 3 | 603 ms | $0.00075 | crossed to docs.langchain.com unprompted |
@@ -182,6 +183,8 @@ Two consequences worth knowing:
 
 ## What it cannot do
 
+- **No dropdowns or menus.** A `<button>` that opens a sort menu is not a
+  field to type into and not a link to follow; GitHub's "Sort by" defeats it.
 - **No vision.** Accessibility-tree only. Canvas-heavy or unlabelled sites defeat it.
 - **No synthesis.** Answers are extracted spans, never composed prose.
 - **Weak multi-hop reasoning.** There is no reasoner in the loop.

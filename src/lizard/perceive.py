@@ -113,10 +113,34 @@ _COLLECT_JS = r"""
   }
 
   const main = document.querySelector('main, [role=main], article') || document.body;
+
+  // Text near the viewport, not the top of the document.
+  //
+  // Sending the first N characters of a long page means the agent cannot
+  // see what it has scrolled to - and, worse, scrolling then changes
+  // nothing in the state at all. On a long docs page that produced an
+  // agent sitting on the exact anchor holding the answer while reporting
+  // answer_here at 0.17, scrolling, and reporting 0.17 again until the
+  // loop gave up. Scroll has to move what the model sees, or it is not an
+  // action.
+  const near = [];
+  const top = -400, bottom = innerHeight + 400;
+  for (const el of main.querySelectorAll('p,li,td,th,h1,h2,h3,h4,pre,dd,dt,figcaption')) {
+    const r = el.getBoundingClientRect();
+    if (r.bottom < top || r.top > bottom) continue;
+    if (el.querySelector('p,li,td,h1,h2,h3,pre')) continue;   // leaf-ish only
+    const t = (el.innerText || '').replace(/\s+/g, ' ').trim();
+    if (t) near.push(t);
+    if (near.length > 120) break;
+  }
+  const visible = near.join('\n');
+  const whole = (main.innerText || '').replace(/\n{3,}/g, '\n\n').trim();
+
   return {
     url: location.href,
     title: document.title,
-    text: (main.innerText || '').replace(/\n{3,}/g, '\n\n').trim(),
+    text: visible.length > 200 ? visible : whole,
+    fullText: whole,
     hasDialog: !!dialog,
     scrollY: Math.round(scrollY),
     scrollMax: Math.round(document.body.scrollHeight - innerHeight),
@@ -150,13 +174,14 @@ class Element:
 class Percept:
     url: str
     title: str
-    text: str
+    text: str            # what is on screen now - changes when you scroll
     scroll_y: int
     scroll_max: int
     elements: list[Element]   # already pruned
     total_found: int          # before pruning
     after_dedupe: int         # after collapsing duplicate targets
     has_dialog: bool = False  # an open modal owns the interaction
+    full_text: str = ""       # the whole page, for verification
 
 
 # Accelerator hints, skip links and other things that are only ever noise.
@@ -282,6 +307,7 @@ async def perceive(page, task: str = "", limit: int = MAX_ELEMENTS) -> Percept:
         scroll_y=raw["scrollY"], scroll_max=raw["scrollMax"],
         elements=kept, total_found=total, after_dedupe=len(deduped),
         has_dialog=bool(raw.get("hasDialog")),
+        full_text=raw.get("fullText", raw["text"]),
     )
 
 
@@ -293,7 +319,7 @@ def render_state(p: Percept, task: str, history: list[str]) -> str:
         f"TITLE: {p.title}",
         f"SCROLL: {p.scroll_y} of {p.scroll_max}",
         "",
-        "PAGE TEXT:",
+        "PAGE TEXT (what is on screen now; scrolling changes this):",
         p.text[:3000],
         "",
         (f"A DIALOG IS OPEN. Only its controls are listed; finish or close "

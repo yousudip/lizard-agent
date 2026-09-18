@@ -34,6 +34,10 @@ DEMOS = [
      "find the documentation page for the asyncio gather function", 8,
      "Precision: lands on the exact anchor and quotes the signature."),
 
+    ("asyncio", "https://docs.python.org/3/",
+     "find which exception asyncio.wait_for raises when it times out", 8,
+     "Four pages deep, and the answer is a sentence quoted off the page."),
+
     ("github", "https://github.com/langchain-ai/langchain",
      "find the contributing guidelines document for this project", 8,
      "Cross-domain: github.com to docs.langchain.com, unprompted."),
